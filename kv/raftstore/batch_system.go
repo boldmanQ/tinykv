@@ -103,8 +103,7 @@ type Transport interface {
 	Send(msg *rspb.RaftMessage) error
 }
 
-/// loadPeers loads peers in this store. It scans the db engine, loads all regions
-/// and their peers from it, and schedules snapshot worker if necessary.
+/// loadPeers loads peers in this store. It scans the db engine, loads all regions and their peers from it
 /// WARN: This store should not be used before initialized.
 func (bs *RaftBatchSystem) loadPeers() ([]*peer, error) {
 	// Scan region meta to get saved regions.
@@ -114,15 +113,14 @@ func (bs *RaftBatchSystem) loadPeers() ([]*peer, error) {
 	kvEngine := ctx.engine.Kv
 	storeID := ctx.store.Id
 
-	var totalCount, tombStoneCount, applyingCount int
+	var totalCount, tombStoneCount int
 	var regionPeers []*peer
 
 	t := time.Now()
 	kvWB := new(engine_util.WriteBatch)
 	raftWB := new(engine_util.WriteBatch)
-	var applyingRegions []*metapb.Region
-	var mergingCount int
 	err := kvEngine.View(func(txn *badger.Txn) error {
+		// get all regions from RegionLocalState
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Seek(startKey); it.Valid(); it.Next() {
@@ -153,14 +151,6 @@ func (bs *RaftBatchSystem) loadPeers() ([]*peer, error) {
 				bs.clearStaleMeta(kvWB, raftWB, localState)
 				continue
 			}
-			if localState.State == rspb.PeerState_Applying {
-				// in case of restart happen when we just write region state to Applying,
-				// but not write raft_local_state to raft rocksdb in time.
-				recoverFromApplyingState(ctx.engine, raftWB, regionID)
-				applyingCount++
-				applyingRegions = append(applyingRegions, region)
-				continue
-			}
 
 			peer, err := createPeer(storeID, ctx.cfg, ctx.regionTaskSender, ctx.engine, region)
 			if err != nil {
@@ -180,20 +170,8 @@ func (bs *RaftBatchSystem) loadPeers() ([]*peer, error) {
 	kvWB.MustWriteToDB(ctx.engine.Kv)
 	raftWB.MustWriteToDB(ctx.engine.Raft)
 
-	// schedule applying snapshot after raft write batch were written.
-	for _, region := range applyingRegions {
-		log.Infof("region %d is applying snapshot", region.Id)
-		peer, err := createPeer(storeID, ctx.cfg, ctx.regionTaskSender, ctx.engine, region)
-		if err != nil {
-			return nil, err
-		}
-		peer.scheduleApplyingSnapshot()
-		ctx.storeMeta.regionRanges.ReplaceOrInsert(&regionItem{region: region})
-		ctx.storeMeta.regions[region.Id] = region
-		regionPeers = append(regionPeers, peer)
-	}
-	log.Infof("start store %d, region_count %d, tombstone_count %d, applying_count %d, merge_count %d, takes %v",
-		storeID, totalCount, tombStoneCount, applyingCount, mergingCount, time.Since(t))
+	log.Infof("start store %d, region_count %d, tombstone_count %d, takes %v",
+		storeID, totalCount, tombStoneCount, time.Since(t))
 	return regionPeers, nil
 }
 
@@ -208,7 +186,7 @@ func (bs *RaftBatchSystem) clearStaleMeta(kvWB, raftWB *engine_util.WriteBatch, 
 	if err != nil {
 		panic(err)
 	}
-	if err := kvWB.SetMsg(meta.RegionStateKey(region.Id), originState); err != nil {
+	if err := kvWB.SetMeta(meta.RegionStateKey(region.Id), originState); err != nil {
 		panic(err)
 	}
 }

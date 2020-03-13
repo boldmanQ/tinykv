@@ -13,8 +13,8 @@ import (
 
 	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/config"
-	"github.com/pingcap-incubator/tinykv/kv/inner_server/raft_server"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore"
+	"github.com/pingcap-incubator/tinykv/kv/storage/raft_storage"
 	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
@@ -370,7 +370,7 @@ func (c *Cluster) Scan(start, end []byte) [][]byte {
 			panic("resp.Responses[0].CmdType != raft_cmdpb.CmdType_Snap")
 		}
 		region := resp.Responses[0].GetSnap().Region
-		iter := raft_server.NewRegionReader(txn, *region).IterCF(engine_util.CfDefault)
+		iter := raft_storage.NewRegionReader(txn, *region).IterCF(engine_util.CfDefault)
 		for iter.Seek(key); iter.Valid(); iter.Next() {
 			if engine_util.ExceedEndKey(iter.Item().Key(), end) {
 				break
@@ -389,34 +389,6 @@ func (c *Cluster) Scan(start, end []byte) [][]byte {
 	}
 
 	return values
-}
-
-func (c *Cluster) TransferLeader(regionID uint64, leader *metapb.Peer) {
-	region, _, err := c.pdClient.GetRegionByID(context.TODO(), regionID)
-	if err != nil {
-		panic(err)
-	}
-	epoch := region.RegionEpoch
-	transferLeader := NewAdminRequest(regionID, epoch, NewTransferLeaderCmd(leader))
-	resp, _ := c.CallCommandOnLeader(transferLeader, 5*time.Second)
-	if resp.AdminResponse.CmdType != raft_cmdpb.AdminCmdType_TransferLeader {
-		panic("resp.AdminResponse.CmdType != raft_cmdpb.AdminCmdType_TransferLeader")
-	}
-}
-
-func (c *Cluster) MustTransferLeader(regionID uint64, leader *metapb.Peer) {
-	timer := time.Now()
-	for {
-		currentLeader := c.LeaderOfRegion(regionID)
-		if currentLeader.Id == leader.Id &&
-			currentLeader.StoreId == leader.StoreId {
-			return
-		}
-		if time.Now().Sub(timer) > 5*time.Second {
-			panic(fmt.Sprintf("failed to transfer leader to [%d] %s", regionID, leader.String()))
-		}
-		c.TransferLeader(regionID, leader)
-	}
 }
 
 func (c *Cluster) MustAddPeer(regionID uint64, peer *metapb.Peer) {
